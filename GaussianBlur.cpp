@@ -102,13 +102,35 @@ int main(int argc, char** argv)
         sendCounts = new int[size];
         sendDispls = new int[size];
 
-        for(int i=0;i<size;++i){
-            int startRow = (i == 0) ? 0 : (i * (totalRows / size) - (kernelSize - 1) / 2);
-            int endRow = (i == size - 1) ? totalRows : ((i + 1) * (totalRows / size) + (kernelSize - 1) / 2);
-            sendCounts[i] = (endRow - startRow) * totalCols;
-            sendDispls[i] = startRow * totalCols;
-        }
+        // for(int i=0;i<size;++i){
+        //     int startRow = (i == 0) ? 0 : (i * (totalRows / size) - (kernelSize - 1) / 2);
+        //     int endRow = (i == size - 1) ? totalRows : ((i + 1) * (totalRows / size) + (kernelSize - 1) / 2);
+        //     sendCounts[i] = (endRow - startRow) * totalCols;
+        //     sendDispls[i] = startRow * totalCols;
+        // }
     }
+
+    MPI_Gather(
+        &dataNeed2Process,
+        1,
+        MPI_INT,
+        sendCounts + rank,
+        1,
+        MPI_INT,
+        0,
+        MPI_COMM_WORLD
+    );
+    MPI_Gather(
+        &displsPerProcess,
+        1,
+        MPI_INT,
+        sendDispls + rank,
+        1,
+        MPI_INT,
+        0,
+        MPI_COMM_WORLD
+    );
+
     // // uchar* recvStart;
     for(int i = 0; i < nBand; i++){
         MPI_Scatterv(
