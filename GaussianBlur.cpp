@@ -1,4 +1,5 @@
 #include <mpi.h>
+#include <omp.h>
 #include <time.h>
 #include <opencv2/opencv.hpp>
 #include <gdal/gdal.h>
@@ -33,7 +34,7 @@ int main(int argc, char** argv)
     uchar*  imageData;
     if (rank == 0)
     {
-        dataset = (GDALDataset*)GDALOpen("./a.tif",GA_ReadOnly);
+        dataset = (GDALDataset*)GDALOpen("./input/HYP_LR_SR_OB_DR.tif",GA_ReadOnly);
         if (dataset == NULL)
         {
             // 处理打开文件失败的情况
@@ -203,12 +204,12 @@ int main(int argc, char** argv)
     }
 
     // 根进程保存成图像
+    // const char* outputFilePath = "./output/HYP_LR_SR_OB_DR_output.tif";
     if(rank == 0){
         // 复制原图像信息生成新图像
-        const char* outputFilePath = "output.tif";
+        const char* outputFilePath = "./output/HYP_LR_SR_OB_DR_output.tif";
         GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GTiff");
         GDALDataset* outputDataset = driver->CreateCopy(outputFilePath, dataset, FALSE, NULL, NULL, NULL);
-
         // 输入新图像数据
         for (int i = 0; i < nBand; ++i)
         {
@@ -231,6 +232,14 @@ int main(int argc, char** argv)
         GDALClose(outputDataset);
         GDALClose(dataset);
     }
+
+    // GDALDataset* output = (GDALDataset*)GDALOpenShared(outputFilePath,GA_Update);
+    // for(int i=0;i<nBand;++i){
+    //     CPLErr res = output -> GetRasterBand(i+1) -> RasterIO(
+    //         GF_Write,
+            
+    //     )
+    // }
 
     MPI_Barrier(MPI_COMM_WORLD); /* IMPORTANT */
     end_time = MPI_Wtime();
