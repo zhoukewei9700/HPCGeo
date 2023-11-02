@@ -45,18 +45,18 @@ int main(int argc, char** argv)
         if(dataset == NULL)
         {
             // 处理打开文件失败的情况
-            cout << "Open file failed" << endl;
+            std::cout << "Open file failed" << endl;
             GDALClose(dataset);
             MPI_Finalize();
             return 1;
         }
-        cout << "打开文件成功" << endl;
+        std::cout << "打开文件成功" << endl;
         rows = dataset -> GetRasterYSize();
         cols = dataset -> GetRasterXSize();
         bands = dataset -> GetRasterCount();
-        cout << "rows: " << rows << endl;
-        cout << "cols: " << cols << endl;
-        cout << "bands: " << bands <<endl;
+        std::cout << "rows: " << rows << endl;
+        std::cout << "cols: " << cols << endl;
+        std::cout << "bands: " << bands <<endl;
     }
     // 广播行列数和波段数给其他进程
     MPI_Bcast(&rows, 1, MPI_INT, 0, MPI_COMM_WORLD);  
@@ -98,144 +98,153 @@ int main(int argc, char** argv)
         MPI_COMM_WORLD
     );
 
-    // 根进程分别读取图片，并转换成Mat
+    // 根进程分别读取图片
+    uchar* bufferData;
+    int* sendCounts;
+    int* sendDispls;
     if(rank == 0)
     {
-        uchar* bufferData = new uchar[(rows * cols + KERNEL_SIZE * (numTilePerEdge - 1) * 2) * bands];  
+        bufferData = new uchar[(rows * cols + KERNEL_SIZE * (numTilePerEdge - 1) * 2) * bands];  //开辟足够的缓冲区
+        uchar* bufferDataStart = bufferData;
+        sendCounts = new int[size];
+        sendDispls = new int[size];
         for (int i = 0; i < size; i++)
         {
             int dataSize = bufferInfoCollection[i*4+3] * bufferInfoCollection[i*4+2];
-            uchar* tempData = new uchar[bands * dataSize];
+            sendCounts[i] = bands * dataSize;
+            sendDispls[i] = (i == 0) ? 0 : (sendDispls[i-1] + sendCounts[i-1]);
             for (int band = 1; band <= bands; band++)
             {
                 CPLErr res =  dataset -> GetRasterBand(band) -> RasterIO(
                     GF_Read,
                     bufferInfoCollection[i*4],bufferInfoCollection[i*4+1],
                     bufferInfoCollection[i*4+3],bufferInfoCollection[i*4+2],
-                    tempData + (band-1)*dataSize,
+                    bufferDataStart + (band-1)*dataSize,
                     bufferInfoCollection[i*4+3],bufferInfoCollection[i*4+2],
                     GDT_Byte,0,0
                 );
                 if(res != CE_None){
-                    cout << "Failed in RasterIO" << endl;
+                    std::cout << "Failed in RasterIO" << endl;
                     GDALClose(dataset);
                     MPI_Finalize();
                     return 1;
                 }
-
-                // bufferData[i] = 
             }
-            
+            bufferDataStart = bufferDataStart + dataSize * bands;
         }
-        
     }
 
-
-    if(tileX == 0){}
-
-    int tilerow = (rank == 0 || rank == 1) ? (rows/2) : (rows/2 + rows%2);
-    int tilecol = (rank == 0 || rank == 2) ? (cols/2) : (cols/2 + cols%2);
-    
-
-
-    int startX,startY,bufferStartX,bufferStartY;
-    if(rank == 0){
-        startX = 0;
-        startY = 0;
-        bufferStartX = 0;
-        bufferStartY = 0;
-    }
-    else if (rank == 1)
-    {
-        startX = cols/2;
-        startY = 0;
-        bufferStartX = startX - bufferWidth;
-        bufferStartY = 0;
-    }
-    else if(rank == 2)
-    {
-        startX = 0;
-        startY = rows/2;
-        bufferStartX = 0;
-        bufferStartY = startY - bufferWidth;
-    }
-    else if(rank == 3)
-    {
-        startX = cols/2;
-        startY = rows/2;
-        bufferStartX = startX - bufferWidth;
-        bufferStartY = startY - bufferWidth;
-    }
-    
-    cout << "rank:" << rank << " tilecol:" << tilecol << " tilerow:" << tilerow << " startX:" <<startX << " startY:" << startY << endl;
-
-    CPLErr res =  dataset -> GetRasterBand(1) -> RasterIO(
-        GF_Read,
-        bufferStartX,bufferStartY,
-        bufferCol, bufferRow,
-        imageData,
-        bufferCol, bufferRow,
-        GDT_Byte,0,0
+    // 分发数据
+    uchar* bufferDataPerProcess = new uchar[bufferInfo[2] * bufferInfo[3] * bands];
+    MPI_Scatterv(
+        bufferData,
+        sendCounts,
+        sendDispls,
+        MPI_UNSIGNED_CHAR,
+        bufferDataPerProcess,
+        bufferInfo[2] * bufferInfo[3] * bands,
+        MPI_UNSIGNED_CHAR,
+        0,
+        MPI_COMM_WORLD
     );
-    if(res != CE_None){
-        cout << "Failed in RasterIO" << endl;
-        GDALClose(dataset);
-        MPI_Finalize();
-        return 1;
-    }
 
-    ostringstream oss;
-    oss << "./output/out.tif";
-    string outpath = oss.str();
+    // TODO: 处理数据
+
+
+
+    // 
+    // if(tileX == 0){}
+
+    // int tilerow = (rank == 0 || rank == 1) ? (rows/2) : (rows/2 + rows%2);
+    // int tilecol = (rank == 0 || rank == 2) ? (cols/2) : (cols/2 + cols%2);
     
-    if(rank == 0){
-        GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GTiff");
-        GDALDataset* outDataset = driver->Create(outpath.c_str(),cols,rows,1,GDT_Byte,NULL);
-        outDataset->SetProjection(dataset->GetProjectionRef());
-        double* geoTransform = new double[6];
-        dataset->GetGeoTransform(geoTransform);
-        outDataset->SetGeoTransform(geoTransform);
-        GDALClose(outDataset);
-    }
-    GDALClose(dataset);
-    MPI_Barrier(MPI_COMM_WORLD);
-    GDALDataset* outputDataset = (GDALDataset*)GDALOpen(outpath.c_str(),GA_Update);
-    if(rank == 0 || rank == 2){
-        CPLErr res2 =  outputDataset -> GetRasterBand(1) -> RasterIO(
-            GF_Write,
-            startX,startY,
-            tilecol,tilerow,
-            imageData,
-            tilecol,tilerow,
-            GDT_Byte,0,0
-        );
-        if(res2 != CE_None){
-            cerr << "Failed to write data" << endl;
-            GDALClose(dataset);
-            MPI_Finalize();
-            return 1;
-        }
-        GDALClose(outputDataset);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-    if(rank == 1 || rank == 3){
-        CPLErr res2 =  outputDataset -> GetRasterBand(1) -> RasterIO(
-            GF_Write,
-            startX,startY,
-            tilecol,tilerow,
-            imageData,
-            tilecol,tilerow,
-            GDT_Byte,0,0
-        );
-        if(res2 != CE_None){
-            cerr << "Failed to write data" << endl;
-            GDALClose(dataset);
-            MPI_Finalize();
-            return 1;
-        }
-        GDALClose(outputDataset);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-    cout << "succeed" << endl;
-    MPI_Finalize();
+
+
+    // int startX,startY,bufferStartX,bufferStartY;
+    // if(rank == 0){
+    //     startX = 0;
+    //     startY = 0;
+    //     bufferStartX = 0;
+    //     bufferStartY = 0;
+    // }
+    // else if (rank == 1)
+    // {
+    //     startX = cols/2;
+    //     startY = 0;
+    //     bufferStartX = startX - bufferWidth;
+    //     bufferStartY = 0;
+    // }
+    // else if(rank == 2)
+    // {
+    //     startX = 0;
+    //     startY = rows/2;
+    //     bufferStartX = 0;
+    //     bufferStartY = startY - bufferWidth;
+    // }
+    // else if(rank == 3)
+    // {
+    //     startX = cols/2;
+    //     startY = rows/2;
+    //     bufferStartX = startX - bufferWidth;
+    //     bufferStartY = startY - bufferWidth;
+    // }
+    
+    // std::cout << "rank:" << rank << " tilecol:" << tilecol << " tilerow:" << tilerow << " startX:" <<startX << " startY:" << startY << endl;
+
+
+
+    // ostringstream oss;
+    // oss << "./output/out.tif";
+    // string outpath = oss.str();
+    
+    // if(rank == 0){
+    //     GDALDriver* driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+    //     GDALDataset* outDataset = driver->Create(outpath.c_str(),cols,rows,1,GDT_Byte,NULL);
+    //     outDataset->SetProjection(dataset->GetProjectionRef());
+    //     double* geoTransform = new double[6];
+    //     dataset->GetGeoTransform(geoTransform);
+    //     outDataset->SetGeoTransform(geoTransform);
+    //     GDALClose(outDataset);
+    // }
+    // GDALClose(dataset);
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // GDALDataset* outputDataset = (GDALDataset*)GDALOpen(outpath.c_str(),GA_Update);
+    // if(rank == 0 || rank == 2){
+    //     CPLErr res2 =  outputDataset -> GetRasterBand(1) -> RasterIO(
+    //         GF_Write,
+    //         startX,startY,
+    //         tilecol,tilerow,
+    //         imageData,
+    //         tilecol,tilerow,
+    //         GDT_Byte,0,0
+    //     );
+    //     if(res2 != CE_None){
+    //         cerr << "Failed to write data" << endl;
+    //         GDALClose(dataset);
+    //         MPI_Finalize();
+    //         return 1;
+    //     }
+    //     GDALClose(outputDataset);
+    // }
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // if(rank == 1 || rank == 3){
+    //     CPLErr res2 =  outputDataset -> GetRasterBand(1) -> RasterIO(
+    //         GF_Write,
+    //         startX,startY,
+    //         tilecol,tilerow,
+    //         imageData,
+    //         tilecol,tilerow,
+    //         GDT_Byte,0,0
+    //     );
+    //     if(res2 != CE_None){
+    //         cerr << "Failed to write data" << endl;
+    //         GDALClose(dataset);
+    //         MPI_Finalize();
+    //         return 1;
+    //     }
+    //     GDALClose(outputDataset);
+    // }
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // std::cout << "succeed" << endl;
+    // MPI_Finalize();
 }
